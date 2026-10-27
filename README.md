@@ -17,10 +17,10 @@ DeepSeek Harness (DSH) 会话级共享 MCP 管理插件。提供跨会话共享�
 
 ### 1. 安装方式
 
-在终端中执行 DSH CLI 命令（以目标 profile 如 `desktop` 为例）：
+在终端中执行 DSH CLI 命令（以目标 profile 如 `desktop` 为例，将 `<username>` 替换为实际仓库所属的 GitHub 用户名或组织名）：
 
 ```sh
-dsh plugin --profile desktop add github:dxc-dxc/dsh-mcp-session-catalog
+dsh plugin --profile desktop add github:<username>/dsh-mcp-session-catalog
 ```
 
 > **本地开发调试**：若在本地源码目录下，可通过软链接形式挂载：
