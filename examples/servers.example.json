@@ -1,0 +1,20 @@
+{
+  "inactiveTurnsThreshold": 20,
+  "servers": [
+    {
+      "serverName": "general-helper",
+      "purpose": "通用轻量 MCP 服务示例，沿用顶层全局 20 轮空闲回收阈值",
+      "command": "node",
+      "args": ["path/to/helper.mjs"],
+      "sharing": "shared"
+    },
+    {
+      "serverName": "heavy-service",
+      "purpose": "重型服务示例（如浏览器自动化/复杂计算），单独指定 5 轮快速回收以节约内存",
+      "command": "node",
+      "args": ["path/to/heavy-service.mjs"],
+      "sharing": "shared",
+      "inactiveTurnsThreshold": 5
+    }
+  ]
+}

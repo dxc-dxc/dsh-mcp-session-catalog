@@ -1,0 +1,42 @@
+{
+  "name": "@dxc-dxc/dsh-mcp-session-catalog",
+  "version": "2.4.0",
+  "type": "module",
+  "license": "MIT",
+  "author": "dxc-dxc",
+  "homepage": "https://github.com/dxc-dxc",
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "description": "Vendor-neutral shared MCP services with session-scoped tools, hot connection reload and archive/turn-based reclamation",
+  "exports": {
+    ".": "./index.mjs",
+    "./v2_4": "./runtime-v2.4.mjs",
+    "./v2_4/locale/*.json": "./locale/*.json",
+    "./v2_4/icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.mjs",
+    "pool.mjs",
+    "runtime-v2.4.mjs",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "docs/*.md",
+    "examples/*.example.json",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2 <0.2.2"
+  },
+  "os": ["darwin"]
+}

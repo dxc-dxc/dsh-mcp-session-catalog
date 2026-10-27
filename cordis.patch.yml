@@ -1,0 +1,6 @@
+- insert:
+    - id: mcp-session-catalog
+      name: '@dxc-dxc/dsh-mcp-session-catalog/v2_4'
+      config:
+        inactiveTurnsThreshold: 20
+        scanDshProfile: true
