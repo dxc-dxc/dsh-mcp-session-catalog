@@ -1,6 +1,6 @@
 {
   "name": "@dxc-dxc/dsh-mcp-session-catalog",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "license": "MIT",
   "author": "dxc-dxc",
@@ -15,18 +15,30 @@
     "./v2_4/locale/*.json": "./locale/*.json",
     "./v2_4/icon": "./icon.svg",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./v2_5": "./runtime-v2.5.mjs",
+    "./v2_5/locale/*.json": "./locale/*.json",
+    "./v2_5/icon": "./icon.svg",
+    "./hub-gate": "./hub-gate.mjs",
+    "./hub-gate/locale/*.json": "./locale/*.json",
+    "./hub-gate/icon": "./icon.svg"
   },
   "files": [
     "index.mjs",
     "pool.mjs",
+    "http-connection.mjs",
+    "hub-adapter.mjs",
+    "hub-gate.mjs",
+    "hub-ownership.mjs",
+    "runtime-v2.5.mjs",
     "runtime-v2.4.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
     "README.md",
     "docs/*.md",
-    "examples/*.example.json",
+    "CHANGELOG.md",
+    "examples/*",
     "LICENSE"
   ],
   "dsh": {
@@ -38,5 +50,10 @@
     "node": ">=22",
     "dsh": ">=0.2.1-rc.2 <0.2.2"
   },
-  "os": ["darwin"]
+  "os": [
+    "darwin"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  }
 }

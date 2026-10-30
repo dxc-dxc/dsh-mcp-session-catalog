@@ -1,0 +1,9 @@
+{
+  "inactiveTurnsThreshold": 20,
+  "scanDshProfile": true,
+  "magpieHub": {
+    "enabled": true,
+    "libraryFile": "/path/to/magpie/library.json",
+    "ownershipDir": "/path/to/shared/dsh-mcp-ownership"
+  }
+}

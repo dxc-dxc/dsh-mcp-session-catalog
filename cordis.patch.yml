@@ -1,6 +1,15 @@
+# Default bundle patch: management only.
+#
+# It does not touch another plugin's MCP entries and does not enable Magpie Hub
+# takeover on its own, so installing this bundle cannot silently disable an
+# entry this Host does not have or flip MCP routing for it.
+#
+# For Hub takeover, apply the opt-in fragment in
+# examples/cordis.hub-takeover.patch.yml to your own profile layer after
+# checking that the entry id it names exists in your composed config.
 - insert:
     - id: mcp-session-catalog
-      name: '@dxc-dxc/dsh-mcp-session-catalog/v2_4'
+      name: '@dxc-dxc/dsh-mcp-session-catalog/v2_5'
       config:
         inactiveTurnsThreshold: 20
         scanDshProfile: true

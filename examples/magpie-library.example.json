@@ -1,0 +1,23 @@
+{
+  "mcpHub": true,
+  "mcp": [
+    {
+      "name": "obsidian",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/path/to/obsidian-server.mjs"],
+      "env": {},
+      "agents": ["dsh"],
+      "disabledTools": []
+    },
+    {
+      "name": "example-helper",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/path/to/helper-server.mjs"],
+      "env": {},
+      "agents": ["dsh"],
+      "disabledTools": []
+    }
+  ]
+}

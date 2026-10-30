@@ -1,0 +1,27 @@
+# Opt-in fragment: let this plugin own the Magpie Hub services instead of the
+# official `@deepseek-ai/dsh-mcp-client` entry.
+#
+# This file is NOT applied by the bundle. Copy its statements into your own
+# profile patch layer (or reference this file from one) only after:
+#
+#   1. confirming the official entry id below exists in your composed config
+#      (`dsh --profile <name> --dump-config` or the profile's patch file);
+#   2. confirming no other loader layer already inserts `mcp-session-catalog`,
+#      because two manager instances in one Host would fight over the same
+#      services and tools.
+#
+# A Loader override replaces the whole `config` object, so every field the
+# manager needs is restated here.
+- id: magpie-mcp-magpie
+  disabled: true
+- insert:
+    - id: mcp-hub-gate
+      name: '@dxc-dxc/dsh-mcp-session-catalog/hub-gate'
+- id: mcp-session-catalog
+  config:
+    inactiveTurnsThreshold: 20
+    scanDshProfile: true
+    magpieHub:
+      enabled: true
+      libraryFile: '~/.config/magpie/library.json'
+      ownershipDir: '~/.dsh/mcp-session-catalog-ownership'

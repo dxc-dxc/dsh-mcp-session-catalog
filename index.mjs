@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
-import { ConnectionPool } from './pool.mjs?generation=2.4.0'
+import { ConnectionPool } from './pool.mjs?generation=2.5.0'
+import { HubAdapter } from './hub-adapter.mjs'
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -7,7 +9,7 @@ import { dirname, join } from 'node:path'
 
 export const name = 'mcp-session-catalog'
 export const inject = ['tools', 'agents', 'systemPrompt']
-const VERSION = '2.4.0'
+const VERSION = '2.5.0'
 const textOutput = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }
 const transient = error => /fetch failed|UND_ERR_CONNECT_TIMEOUT|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|connection closed|server.*exited|temporarily unavailable|\b50[234]\b/i.test(error?.message ?? '')
 const waitFor = (promise, signal) => {
@@ -83,7 +85,11 @@ const dshDefinitions = ctx => {
 }
 
 function terminateTree(child) {
-  if (!child || !Number.isSafeInteger(child.pid) || child.pid <= 1 || stoppingChildren.has(child)) return
+  if (!child || !Number.isSafeInteger(child.pid) || child.pid <= 1) return Promise.resolve()
+  if (stoppingChildren.has(child)) return child.mcpStopped
+  let resolveStopped, rejectStopped
+  child.mcpStopped = new Promise((resolve, reject) => { resolveStopped = resolve; rejectStopped = reject })
+  child.mcpStopped.catch(() => {})
   stoppingChildren.add(child)
   const signal = value => {
     try {
@@ -95,14 +101,37 @@ function terminateTree(child) {
   // The wrapper may already have exited while a grandchild still owns the group.
   const timer = setTimeout(() => signal('SIGKILL'), 2000)
   timer.unref?.()
+  const deadline = Date.now() + 5000
+  let lastError = null
+  const observe = () => {
+    try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 0) }
+    catch (error) {
+      if (error.code === 'ESRCH') { clearTimeout(timer); resolveStopped(); return }
+      // EPERM and similar mean the probe could not answer, not that the group
+      // is gone: keep polling to the deadline instead of failing on the first
+      // inconclusive answer.
+      lastError = error
+    }
+    if (Date.now() >= deadline) {
+      clearTimeout(timer)
+      rejectStopped(new Error(`MCP process exit cannot be confirmed${lastError ? ` (${lastError.code ?? lastError.message})` : ''}`))
+      return
+    }
+    setTimeout(observe, 20)
+  }
+  observe()
+  return child.mcpStopped
 }
 
 // A Connection belongs to a pool, not to an Agent. Agent leases independently
 // control tool visibility; shared pools also share backend application state.
 // Callbacks from an old child process cannot affect its replacement.
 export class Connection {
-  constructor(server) {
+  constructor(server, ownership) {
     this.server = server
+    this.ownership = ownership
+    this.directToken = randomUUID()
+    this.stopping = new Set()
     this.child = null
     this.ready = null
     this.pending = new Map()
@@ -122,6 +151,11 @@ export class Connection {
   }
   async start() {
     if (this.closed) throw new Error('MCP connection disposed')
+    if (this.ownership) {
+      await this.ownership.enterDirect(this.server.serverName, this.directToken)
+      if (this.closed) { await this.ownership.exitDirect(this.directToken); throw new Error('MCP connection disposed') }
+      this.ownership.assertDirect(this.server.serverName)
+    }
     const child = spawn(this.server.command, this.server.args ?? [], {
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', env: { ...process.env, ...this.server.env },
       ...(this.server.cwd ? { cwd: expandHomePath(this.server.cwd) } : {}),
@@ -218,14 +252,18 @@ export class Connection {
     this.child = null; this.ready = null
     for (const pending of this.pending.values()) { pending.finish(); pending.reject(error) }
     this.pending.clear()
-    terminateTree(child)
+    const closing = Promise.resolve(terminateTree(child)).then(() => this.ownership?.exitDirect(this.directToken))
+    this.stopping.add(closing)
+    closing.finally(() => this.stopping.delete(closing)).catch(() => {})
+    return closing
   }
   stop(reason = 'MCP connection closed') {
     const child = this.child
-    this.fail(new Error(reason))
+    const stopping = this.fail(new Error(reason))
     if (child) { try { child.stdin.end() } catch {} }
+    return stopping
   }
-  dispose() { this.closed = true; this.stop('MCP connection disposed') }
+  async dispose() { this.closed = true; await this.stop('MCP connection disposed'); await Promise.all([...this.stopping]) }
 }
 function renderResult(result, max) {
   const parts = (result?.content ?? []).map(block => {
@@ -281,15 +319,17 @@ export function apply(ctx, config = {}) {
         servers.some(server => server.serverName === id) ? 'on-demand managed' : 'unsupported transport or disabled parent/conditional entry'
       return `${label}: ${status}`
     }).join('\n')
+  let hub = null
   const definitions = () => [
     ...(config.servers ?? (rawJsonTop ? sourceDefinitions(rawJsonTop) : [])),
     ...discovered(),
   ]
   let servers = normalizeServers(definitions())
   let reloadError = null
+  let hubFailure = null
   let reloadQueue = Promise.resolve()
   const managementDisposers = []
-  const pools = new ConnectionPool(server => new Connection(server), waitFor, transient, delay)
+  const pools = new ConnectionPool(server => new Connection(server, hub?.ownership), waitFor, transient, delay)
   const states = new Map()
   const sessionStates = new WeakMap()
   const scans = new Map()
@@ -374,6 +414,7 @@ export function apply(ctx, config = {}) {
   const alive = (state, lease) => !disposed && !isArchived(state.agent) && !state.closed && !lease.closed && states.get(state.agent) === state && (!ctx.agents?.get || ctx.agents.get(state.agent.id) === state.agent)
   const executeNative = async (state, lease, tool, args, exec) => {
     await reloadDefinitions()
+    hub?.assertDirect(lease.server.serverName)
     if (exec?.agent !== state.agent || !alive(state, lease)) throw new Error('MCP tool not loaded in this session; call mcp_load again')
     if (lease.stale || lease.ref?.pool?.stale) throw new Error('MCP service configuration retired; call mcp_load again')
     lease.active++
@@ -385,6 +426,7 @@ export function apply(ctx, config = {}) {
     const attempts = safeRead(lease.server, tool) ? 3 : 1
     try {
       for (let attempt = 0; attempt < attempts; attempt++) {
+        hub?.assertDirect(lease.server.serverName)
         if (lease.stale || lease.ref?.pool?.stale) throw new Error('MCP service configuration retired; call mcp_load again')
         try {
           const result = await pools.call(lease.ref, tool.name, args, exec.signal)
@@ -415,6 +457,7 @@ export function apply(ctx, config = {}) {
   }
   const load = async (agent, server, signal) => {
     if (signal?.aborted || disposed || isArchived(agent) || closedAgents.has(agent)) throw new Error('MCP load cancelled')
+    hub?.assertDirect(server.serverName)
     let state = stateOf(agent)
     let lease = state.leases.get(server.serverName)
     if (lease && !lease.closed) {
@@ -447,6 +490,7 @@ export function apply(ctx, config = {}) {
     return joinLoad(state, lease, signal)
   }
   const close = agent => {
+    hub?.close(agent)
     closedAgents.add(agent)
     for (const [ref, owner] of scans) if (owner === agent) { pools.release(ref); scans.delete(ref) }
     const state = states.get(agent)
@@ -457,6 +501,7 @@ export function apply(ctx, config = {}) {
   }
   const scan = async (server, signal, agent) => {
     if (disposed || isArchived(agent) || signal?.aborted || closedAgents.has(agent)) throw new Error('MCP refresh cancelled')
+    hub?.assertDirect(server.serverName)
     const ref = pools.acquire(server, agent, 'scan')
     scans.set(ref, agent)
     try {
@@ -474,7 +519,14 @@ export function apply(ctx, config = {}) {
     return next
   }
   const reloadOnce = async () => {
-    if ((!serversFile && !scanDsh) || disposed) return
+    if ((!serversFile && !scanDsh && !hub) || disposed) return
+    if (hub) {
+      // A Hub-side failure (ownership registry, lock, retirement) degrades the
+      // Hub path only. It must never take away management of independent stdio
+      // services, whose contracts are unchanged by v2.5.
+      try { await hub.reload(); hubFailure = null }
+      catch (error) { hubFailure = `Magpie Hub unavailable: ${error.message}` }
+    }
     let next, nextInactive = config.inactiveTurnsThreshold ?? 20
     try {
       const parsed = serversFile ? JSON.parse(await readFile(serversFile, 'utf8')) : null
@@ -483,7 +535,8 @@ export function apply(ctx, config = {}) {
       next = normalizeServers([
         ...(config.servers ?? (parsed ? sourceDefinitions(parsed) : [])),
         ...discovered(),
-      ])
+      ].filter(server => !hub?.owns(server.serverName)))
+      if (hub) next.push(...hub.definitions())
     } catch {
       // Diagnostics deliberately omit configuration values and expression errors.
       reloadError = 'connection file rejected; previous configuration kept (check source and server fields)'
@@ -527,12 +580,16 @@ export function apply(ctx, config = {}) {
         await cacheReady
         const loaded = states.get(exec?.agent)?.leases
         const body = servers.map(server => {
-          const entry = catalog.servers[server.serverName], lease = loaded?.get(server.serverName)
+          const entry = catalog.servers[server.serverName], lease = server.hub ? hub.loaded(exec?.agent, server.serverName) : loaded?.get(server.serverName)
           const names = entry?.tools?.map(tool => `  ${tool.name} — ${tool.description.slice(0, 100)}`).join('\n') ?? '  Tool list not cached; call mcp_load to discover and load.'
           return `${server.serverName} — ${server.purpose ?? ''} [${lease ? 'loaded in this session' : 'not loaded'}]\n${names}`
         }).join('\n\n')
         const inventory = nativeStatus()
-        return ((reloadError ? `Configuration warning: ${reloadError}\n\n` : '') +
+        const mapping = hub?.mappingIssues?.size ? `Hub services blocked by tool mapping: ${[...hub.mappingIssues].map(([name, why]) => `${name} (${why})`).join('; ')}` : null
+        const hubNotice = hubFailure ?? hub?.error ?? mapping ?? (hub?.hubOff
+          ? 'Magpie Hub is off in the Library: Hub-managed services are unavailable and their DSH entry stays retired. Turn the Hub back on, or remove this plugin\'s magpieHub takeover.'
+          : hub?.libraryAbsent ? 'Magpie Library not found: no Hub-managed service is claimed; independent stdio servers are unaffected.' : null)
+        return (((reloadError || hubNotice) ? `Configuration warning: ${reloadError ?? hubNotice}\n\n` : '') +
           (inventory ? `DSH MCP entries:\n${inventory}\n\n` : '') + (body || 'No on-demand MCP servers configured.')).slice(0, config.maxResultChars ?? 60000)
       },
     }))
@@ -555,8 +612,13 @@ export function apply(ctx, config = {}) {
               } catch { return null }
             }).filter(Boolean)
         )
-        if (activeOfficial.has(server.serverName)) {
+        if (!server.hub && activeOfficial.has(server.serverName)) {
           throw new Error(`MCP server ${server.serverName} is already running as an official client; disable its entry in DSH to manage on-demand`)
+        }
+        if (server.hub) {
+          if (args.action === 'unload') return hub.unload(agent, server.serverName) ? `Unloaded ${server.serverName} from this session; other sessions were not changed` : `${server.serverName} is not loaded in this session`
+          const lease = await hub.load(agent, server.serverName, exec.signal)
+          return `Loaded ${lease.registrations.size} tools from ${server.serverName} only in session ${agent.id}:\n${[...lease.registrations.keys()].join('\n')}`
         }
         if (args.action === 'unload') {
           const state = states.get(agent), lease = state?.leases.get(server.serverName)
@@ -579,7 +641,7 @@ export function apply(ctx, config = {}) {
         const results = reloadError ? [`configuration: ${reloadError}`] : []
         for (const server of selected) {
           if (disposed || isArchived(agent) || exec.signal?.aborted || closedAgents.has(agent)) throw new Error('MCP refresh cancelled')
-          try { results.push(`${server.serverName}: ${await scan(server, exec?.signal, agent)} tools cached; scan reference released`) }
+          try { results.push(`${server.serverName}: ${server.hub ? await hub.refresh(server.serverName, agent, exec?.signal) : await scan(server, exec?.signal, agent)} tools cached; scan reference released`) }
           catch (error) {
             if (disposed || isArchived(agent) || exec.signal?.aborted || closedAgents.has(agent)) throw new Error('MCP refresh cancelled')
             results.push(`${server.serverName}: failed — ${error.message}`)
@@ -589,8 +651,27 @@ export function apply(ctx, config = {}) {
       },
     }))
   }
+  if (config.magpieHub?.enabled === true) {
+    const retireDirect = async names => {
+      for (const name of names) pools.markStale(name)
+      for (const state of [...states.values()]) for (const lease of [...state.leases.values()]) if (names.has(lease.server.serverName)) { lease.stale = true; revoke(state, lease) }
+      for (const [ref] of [...scans]) if (names.has(ref.pool.server.serverName)) { pools.release(ref); scans.delete(ref) }
+      await pools.retire(names)
+      if (hub) await hub.retireOfficial()
+    }
+    hub = new HubAdapter(ctx, config.magpieHub, {
+      retireDirect, waitFor, live: agent => !disposed && !isArchived(agent) && !closedAgents.has(agent) && (!ctx.agents?.get || ctx.agents.get(agent.id) === agent),
+      remember: async (name, tools, info) => {
+        await cacheReady
+        if (disposed) return
+        catalog.servers[name] = { updatedAt: Date.now(), serverInfo: info ? { name: info.name, version: info.version } : null, tools: tools.map(tool => ({ name: tool.publicName, description: tool.description?.slice(0, 160) ?? '' })) }
+        await persist()
+      },
+    })
+    servers = [...servers.filter(server => !hub.owns(server.serverName)), ...hub.definitions()]
+  }
   registerManagement()
-  if (scanDsh) {
+  if (scanDsh || hub) {
     ctx.on('loader/config-update', () => reloadDefinitions())
     ctx.on('loader/partial-dispose', () => reloadDefinitions())
     ctx.on('ready', () => reloadDefinitions())
@@ -606,9 +687,11 @@ export function apply(ctx, config = {}) {
     for (const [agent, state] of [...states]) if (isArchived(agent)) {
       for (const lease of [...state.leases.values()]) revoke(state, lease)
     }
+    if (hub) for (const lease of hub.allLeases()) if (isArchived(lease.agent)) hub.revoke(lease)
   })
   ctx.on('session/event', (session, event) => {
     if (event?.type !== 'turn/end' || !Number.isSafeInteger(event.data?.turn) || event.data.turn < 1) return
+    hub?.turn(session, event, inactiveTurns)
     const state = sessionStates.get(session)
     if (!state || state.closed) return
     for (const lease of [...state.leases.values()]) {
@@ -623,6 +706,7 @@ export function apply(ctx, config = {}) {
   ctx.on('agent/disposed', ({ agent }) => close(agent))
   ctx.on('agent/status', ({ agent, status }) => {
     if (status !== 'idle') return
+    hub?.idle(agent)
     const state = states.get(agent)
     if (state) {
       for (const lease of [...state.leases.values()]) {
@@ -640,6 +724,7 @@ export function apply(ctx, config = {}) {
     for (const ref of scans.keys()) pools.release(ref)
     scans.clear()
     pools.dispose()
+    return hub?.dispose().catch(() => ctx.logger?.warn?.('Hub disposal could not confirm ownership clearance; admission remains blocked'))
   }
   ctx.effect(() => cleanup, 'mcp-session-catalog: scoped resources')
   ctx.on('dispose', cleanup)

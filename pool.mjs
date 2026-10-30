@@ -11,6 +11,7 @@ export class ConnectionPool {
     this.sessions = new WeakMap()
     this.all = new Set()
     this.disposed = false
+    this.closing = new Set()
   }
   acquire(server, agent, kind = 'lease') {
     if (this.disposed) throw new Error('MCP pool disposed')
@@ -33,7 +34,7 @@ export class ConnectionPool {
     return ref
   }
   assertRef(ref) {
-    if (this.disposed || ref.released || ref.pool.closed) throw new Error('MCP pool reference released')
+    if (this.disposed || ref.released || ref.pool.closed || ref.pool.stale) throw new Error('MCP pool reference released')
   }
   async tools(ref, force = false, signal) {
     this.assertRef(ref)
@@ -48,7 +49,7 @@ export class ConnectionPool {
             pool.tools = tools
             return tools
           } catch (error) {
-            if (pool.closed || attempt >= 1 || !this.shouldRetry(error)) throw error
+            if (pool.closed || pool.stale || attempt >= 1 || !this.shouldRetry(error)) throw error
             await this.pause(300)
             if (pool.closed) throw new Error('MCP pool closed during discovery')
           }
@@ -95,8 +96,25 @@ export class ConnectionPool {
     pool.closed = true
     if (pool.directory.get(pool.server.serverName) === pool) pool.directory.delete(pool.server.serverName)
     this.all.delete(pool)
-    pool.connection.dispose()
+    const closing = Promise.resolve(pool.connection.dispose())
+    this.closing.add(closing)
+    closing.finally(() => this.closing.delete(closing)).catch(() => {})
   }
+  async retire(names) {
+    const selected = [...this.all].filter(pool => names.has(pool.server.serverName))
+    for (const pool of selected) {
+      pool.stale = true
+      for (const ref of [...pool.refs]) this.release(ref)
+    }
+    const deadline = Date.now() + 10000
+    while (selected.some(pool => pool.calls)) {
+      if (Date.now() > deadline) throw new Error('Hub direct retirement is waiting for in-flight calls')
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    for (const pool of selected) this.close(pool)
+    await Promise.all([...this.closing])
+  }
+  async settled() { await Promise.all([...this.closing]) }
   dispose() {
     if (this.disposed) return
     this.disposed = true

@@ -3,16 +3,18 @@
   "servers": [
     {
       "serverName": "general-helper",
-      "purpose": "通用轻量 MCP 服务示例，沿用顶层全局 20 轮空闲回收阈值",
+      "purpose": "独立 stdio 服务样例，沿用全局 20 轮回收阈值",
+      "transport": "stdio",
       "command": "node",
-      "args": ["path/to/helper.mjs"],
+      "args": ["/path/to/helper.mjs"],
       "sharing": "shared"
     },
     {
       "serverName": "heavy-service",
-      "purpose": "重型服务示例（如浏览器自动化/复杂计算），单独指定 5 轮快速回收以节约内存",
+      "purpose": "独立重型服务样例，覆盖为连续 5 轮未用时回收",
+      "transport": "stdio",
       "command": "node",
-      "args": ["path/to/heavy-service.mjs"],
+      "args": ["/path/to/heavy-service.mjs"],
       "sharing": "shared",
       "inactiveTurnsThreshold": 5
     }
