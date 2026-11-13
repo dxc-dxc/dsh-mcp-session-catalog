@@ -4,6 +4,7 @@ import { mkdtemp, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../index.mjs'
+import { installNativeExecutor, dispatchOne } from './runtime-compat.mjs'
 const base=process.env.DSH_TEST_MODULE_ROOT
 if (!base) throw new Error('Set DSH_TEST_MODULE_ROOT to the @deepseek-ai directory in the target DSH installation')
 const dshImport=path=>pathToFileURL(join(base,path)).href
@@ -13,6 +14,7 @@ const {default:SystemPrompt}=await import(dshImport('dsh-system-prompt/lib/index
 const {createScope}=await import(dshImport('dsh-scope/lib/index.js'))
 const temp=await mkdtemp(join(tmpdir(),'mcp-shared-pool-'))
 const ctx=new Context();new SystemPrompt(ctx,{});new Tools(ctx)
+installNativeExecutor(ctx)
 const scopes=[]
 const agent=id=>{const a={id,session:{id},status:'idle'},s=createScope(ctx,a);a.ctx=s.ctx;scopes.push(s);return a}
 const a=agent('A'),b=agent('B'),c=agent('C'),d=agent('D'),e=agent('E'),f=agent('F')
@@ -38,7 +40,7 @@ try {
  assert.equal(first.pid,second.pid);assert.equal(first.initializes,1);assert.equal(first.lists,1)
  assert.equal(count(),0);assert.equal(count(c),0)
  ok('cross-Agent cold loads use one process, one initialize and one tools/list')
- const denied=await ctx.tools.execute({agent:c,name:'mcp__shared__identity',arguments:{},signal,callId:'unloaded-C'})
+ const denied=await dispatchOne(ctx,{agent:c,name:'mcp__shared__identity',arguments:{},signal,callId:'unloaded-C'})
  assert.equal(denied.isError,true);ok('C cannot invoke a shared tool before acquiring its own scope')
  await run(c,'mcp_refresh',{server:'shared'})
  assert.equal(count(c),0);const refreshed=await identity(b,'shared')

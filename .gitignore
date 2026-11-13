@@ -6,3 +6,10 @@ node_modules/
 examples/servers.local.json
 *.log
 coverage/
+
+# 本地研究与过程记录：含本机会话逐字稿和绝对路径，不随仓库发布
+/diagnostics/
+/analysis/
+/findings.md
+/progress.md
+/task_plan.md

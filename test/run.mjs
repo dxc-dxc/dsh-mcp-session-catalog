@@ -7,6 +7,8 @@ if (!process.env.DSH_TEST_MODULE_ROOT) {
 }
 
 const suites = [
+  'skill-loader',
+  'hub-prompt-compat',
   'integration',
   'shared-pool',
   'config-reload',
@@ -25,5 +27,5 @@ for (const name of suites) {
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 console.log('\n========================================')
-console.log('ALL SUITES PASSED: 55 regression + 17 hub assertions = 72 assertions')
+console.log('ALL SUITES PASSED (including prompt compatibility and Hub lease checks)')
 console.log('========================================\n')

@@ -4,9 +4,13 @@ import { harness, dshImport, plainOutput, apply, tempArea, nativeName } from './
 import { createFakeHub, hubTool, deadline } from './hub-fixture.mjs'
 const { default: SessionStore } = await dshImport('dsh-session/lib/index.js')
 const { default: SessionProjections } = await dshImport('dsh-session-projection/lib/index.js')
+const { default: Agents } = await dshImport('dsh-agent/lib/index.js')
 const { default: AgentLoop } = await dshImport('dsh-agent-loop/lib/index.js')
 const { LlmRuntime, LlmAdapter, createUserMessage, isAgentLoopRequest, markAgentLoopRequest } = await dshImport('dsh-llm/lib/index.js')
 const { default: PtcRuntime } = await dshImport('dsh-ptc-runtime/lib/index.js')
+const { default: Tools } = await dshImport('dsh-tools/lib/index.js')
+const PtcExecutor = typeof Tools.prototype.setExecutor === 'function'
+  ? (await dshImport('dsh-tool-executor-ptc/lib/index.js')).PtcExecutor : undefined
 const jsonl = await dshImport('dsh-session-persistence-jsonl/lib/index.js')
 
 // Only execution is unused. Model-facing PTC codegen is the real Tools SDK
@@ -40,18 +44,19 @@ class CaptureAdapter extends LlmAdapter {
 }
 
 export async function loopHarness(area, options = {}) {
-  const h = harness(options), { ctx } = h
+  const h = harness({ ...options, deferAgentRegistry: true }), { ctx } = h
   new SessionStore(ctx); new SessionProjections(ctx); new LlmRuntime(ctx); new DescriptorRuntime(ctx)
+  const agentsFiber = await ctx.plugin(Agents)
   const adapter = new CaptureAdapter(), errors = []
   ctx.on('agent/error', event => { errors.push(event.error?.stack ?? String(event.error)) })
   ctx.llm.registerAdapter(['fixture'], adapter)
   await jsonl.apply(ctx, { root: join(area.path, 'sessions'), compression: 'none', listConcurrency: 1 })
-  new AgentLoop(ctx, { agents: [], maxParallelToolCalls: 2 })
+  const loopFiber = await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 2 })
   const handles = [], closeHost = h.close.bind(h)
   return Object.assign(h, {
     adapter,
     async create(id, mode = 'native') {
-      const handle = await ctx.agents.create({ sessionId: id, agentOptions: { provider: 'fixture', model: 'capture' }, setup(agentCtx) { if (mode === 'ptc') agentCtx.tools.presentAs('ptc') } })
+      const handle = await ctx.agents.create({ sessionId: id, agentOptions: { provider: 'fixture', model: 'capture' }, setup(agentCtx) { if (mode === 'ptc') { if (PtcExecutor) agentCtx.tools.setExecutor(new PtcExecutor(agentCtx)); else agentCtx.tools.presentAs('ptc') } } })
       handles.push(handle); return handle
     },
     async request(agent) {
@@ -62,10 +67,10 @@ export async function loopHarness(area, options = {}) {
       return adapter.requests.at(-1)
     },
     async resume(id, mode = 'native') {
-      const handle = await ctx.agents.resume({ resumeSessionId: id, agentOptions: { provider: 'fixture', model: 'capture' }, setup(agentCtx) { if (mode === 'ptc') agentCtx.tools.presentAs('ptc') } })
+      const handle = await ctx.agents.resume({ resumeSessionId: id, agentOptions: { provider: 'fixture', model: 'capture' }, setup(agentCtx) { if (mode === 'ptc') { if (PtcExecutor) agentCtx.tools.setExecutor(new PtcExecutor(agentCtx)); else agentCtx.tools.presentAs('ptc') } } })
       handles.push(handle); return handle
     },
-    async close() { for (const handle of handles.reverse()) await handle.dispose(); await closeHost() },
+    async close() { for (const handle of handles.reverse()) await handle.dispose(); await loopFiber.dispose(); await agentsFiber.dispose(); await closeHost() },
   })
 }
 const nativeTools = request => request.tools?.filter(t => t.name.startsWith('mcp__')) ?? []

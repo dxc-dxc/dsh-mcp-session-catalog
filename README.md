@@ -1,6 +1,22 @@
 # dsh-mcp-session-catalog
 
-DeepSeek Harness（DSH）会话级按需 MCP 管理插件。独立 stdio 服务按需启动、同 Host 复用连接，并按会话轮次回收；v2.5 增加 Magpie Hub 兼容，将 Hub 逻辑服务的工具按需授予当前会话。
+DeepSeek Harness（DSH）会话级按需 MCP 与技能加载插件。独立 stdio 服务按需启动、同 Host 复用连接，并按会话轮次回收；v2.5 增加 Magpie Hub 兼容；v2.6 增加 `skill_load`，根据技能路由按名加载隐藏技能，复用 DSH 官方解析与资源格式。
+
+## 技能按需加载（v2.6）
+
+保留 `disable-model-invocation: true`，技能就不会进入官方模型技能目录。模型先按 `skill-router` 的任务类型、意图和主题分册选中技能，再调用：
+
+```javascript
+skill_load({ name: 'code-review' })
+```
+
+工具通过当前 Agent 的 `scope`、有效工作目录与取消信号调用 `ctx.skills.list/get`，使用官方 `renderSkillContent` 返回 `<skill_content>`、`<skill_resources>` 与 `<skill_instructions>`。本地、项目、预设及运行时技能的优先级和相对资源基址均由官方服务处理；插件不扫描技能目录、不修改技能 frontmatter，也不把技能改成全局可见。
+
+新入口 `@dxc-dxc/dsh-mcp-session-catalog/skill-loader` 独立于 MCP 管理器；默认 bundle 同时挂载两者。官方 `skill` 和用户 `/name` 调用保留。隐藏且禁止用户调用（两个 invocation 标记均为 false）的技能不能通过新工具加载。模型需要可见技能时仍可使用官方 `skill`。
+
+正文以工具结果进入调用会话，与官方 `skill` 的返回路径一致。它不会作为全局提示注入其他会话，也不会自动执行技能。调用后正文会进入会话历史；本功能不提供历史正文卸载或 MCP 式 20 轮 TTL。正常 fork/resume 仍按 DSH 会话历史继承规则处理。
+
+已有 `skill-router` 应把“隐藏技能直接 read 文件”改为“优先 `skill_load`；工具未安装时才按原路径读取”。插件不会解析 router 来做关键词路由，也不会自动修改用户路由文件。完整迁移与验证见[技能按名加载](docs/skill-loading.md)。当前实现以 DSH 0.2.2-rc.2 的公开技能 API 为依据；在缺少这些导出的版本上该入口不注册并记录警告，MCP 部分不受影响。
 
 > v2.5 已完成实现与集成验收：9 个套件、72 项断言全部通过，覆盖原独立路径回归、Hub 契约、跨 Host 互斥与真实 AgentLoop 装配。变更明细见 [CHANGELOG](CHANGELOG.md)，证据与未验证范围见[验证与发布前事项](docs/验证与发布前事项.md)。
 
@@ -88,7 +104,7 @@ Magpie 全局 Hub 开关保持原样，其他客户端共用同一 Hub 后端属
 dsh plugin --profile <profile> add github:dxc-dxc/dsh-mcp-session-catalog
 ```
 
-bundle 默认补丁只插入管理器（`v2_5`，20 轮回收 + Loader 扫描），不改动其他插件的 MCP 条目。要让插件接管 Magpie Hub，把 [examples/cordis.hub-takeover.patch.yml](examples/cordis.hub-takeover.patch.yml) 中的三条语句合并进该 profile 的 patch 层；合并前先确认官方条目 id 在该 profile 的组合配置中确实存在，且没有第二处插入 `mcp-session-catalog`。
+bundle 默认补丁插入 MCP 管理器（`v2_5`，20 轮回收 + Loader 扫描）及独立的 `skill-name-loader`，不改动其他插件的 MCP 条目。要让插件接管 Magpie Hub，把 [examples/cordis.hub-takeover.patch.yml](examples/cordis.hub-takeover.patch.yml) 中的三条语句合并进该 profile 的 patch 层；合并前先确认官方条目 id 在该 profile 的组合配置中确实存在，且没有第二处插入 `mcp-session-catalog`。
 
 安装后按顺序验证：
 

@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename } from 'node:path'
 import { apply } from '../index.mjs'
+import { installNativeExecutor } from './runtime-compat.mjs'
 
 const base = process.env.DSH_TEST_MODULE_ROOT
 if (!base) throw new Error('Set DSH_TEST_MODULE_ROOT to the DSH @deepseek-ai directory')
@@ -20,6 +21,7 @@ const cacheFile = join(temp, 'cache.json')
 const ctx = new Context()
 new SystemPrompt(ctx, {})
 new Tools(ctx)
+installNativeExecutor(ctx)
 const loader = new Loader(ctx)
 loader.root.data = []
 // Enabled official entries must never launch real external software in the test.
@@ -66,7 +68,7 @@ try {
   ok('actual Loader evaluates expression nodes before demand-start and scoped registration')
 
   // The root loader enumerates nested include trees, not only a profile patch.
-  class MemoryTree extends EntryTree { write() {} }
+  class MemoryTree extends EntryTree { write() {} commit() {} }
   const tree = new MemoryTree(entry.ctx)
   tree.root.data = []
   await tree.create({ id: 'nested', name: '@deepseek-ai/dsh-mcp-client', disabled: true, config: definition('nested') })

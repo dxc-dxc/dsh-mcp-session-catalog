@@ -1,4 +1,4 @@
-# Default bundle patch: management only.
+# Default bundle patch: MCP management and on-demand skill loading only.
 #
 # It does not touch another plugin's MCP entries and does not enable Magpie Hub
 # takeover on its own, so installing this bundle cannot silently disable an
@@ -13,3 +13,5 @@
       config:
         inactiveTurnsThreshold: 20
         scanDshProfile: true
+    - id: skill-name-loader
+      name: '@dxc-dxc/dsh-mcp-session-catalog/skill-loader'

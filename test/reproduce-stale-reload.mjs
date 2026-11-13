@@ -7,6 +7,7 @@ import { mkdtemp, writeFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename } from 'node:path'
 import { apply } from '../index.mjs'
+import { installNativeExecutor } from './runtime-compat.mjs'
 
 const base = process.env.DSH_TEST_MODULE_ROOT
 if (!base) throw new Error('Set DSH_TEST_MODULE_ROOT to the @deepseek-ai directory in the target DSH installation')
@@ -22,6 +23,7 @@ const definition = extra => ({ serverName: 'demo', command: process.execPath, ar
 const ctx = new Context()
 new SystemPrompt(ctx, {})
 new Tools(ctx)
+installNativeExecutor(ctx)
 const agent = { id: 'regression', session: { id: 'regression' }, status: 'idle' }
 const scope = createScope(ctx, agent)
 agent.ctx = scope.ctx

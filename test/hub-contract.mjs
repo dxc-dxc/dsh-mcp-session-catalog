@@ -193,6 +193,52 @@ test('revocation during policy/approval wait prevents a previously resolved wrap
   } finally { await x.close() }
 })
 
+test('progressive Hub discovery names every backend tool and invokes through call_tool', async () => {
+  // github is assigned in the Library but the Hub answers for it with prose
+  // only, which is what an unavailable backend looks like on the wire.
+  const catalog = {
+    obsidian: [hubTool(raw('obsidian', 'identity')), hubTool(raw('obsidian', 'write'), { annotations: { readOnlyHint: false } })],
+  }
+  const progressive = [{ name: 'find_tools', description: 'find', inputSchema: { type: 'object', properties: {} } }, { name: 'call_tool', description: 'invoke', inputSchema: { type: 'object', properties: {} } }]
+  const seen = []
+  const x = await setup({
+    hub: {
+      tools: progressive,
+      call: (tool, args) => {
+        seen.push({ tool, args })
+        if (tool === 'find_tools') {
+          // Mirrors the real Hub: an empty query with a server names every tool of
+          // that backend; a name query answers with that tool's full definition.
+          if (args.server !== undefined && !args.query) {
+            const found = catalog[args.server] ?? []
+            return { content: [{ type: 'text', text: found.length ? `Every tool, by name; find_tools with its name gives its parameters:\n${found.map(item => `- ${item.name}: ${item.description}`).join('\n')}\n` : `No server called ${args.server} is behind this one.` }] }
+          }
+          const found = (catalog[args.server ?? 'obsidian'] ?? []).filter(item => item.name === args.query || item.name.includes(args.query))
+          return { content: [{ type: 'text', text: found.length ? `Run one with call_tool, its name and arguments as its inputSchema says.\n${JSON.stringify(found)}` : `No tool matches "${args.query}".` }] }
+        }
+        if (tool === 'call_tool') return { content: [{ type: 'text', text: `ran ${args.name}` }] }
+        return undefined
+      },
+    },
+  })
+  try {
+    const { h, hub, a, b } = x
+    await h.run(a, 'mcp_load', { server: 'obsidian' })
+    assert.equal(h.schemas(a).length, 2, 'only the requested backend is granted')
+    assert.equal(h.schemas(a).some(tool => tool.name.includes('github')), false)
+    const result = await h.dispatch(a, nativeName(h, a, 'identity'))
+    assert.equal(result.isError, false)
+    assert.match(textOf(result), /ran obsidian__identity/)
+    assert.deepEqual(seen.filter(row => row.tool === 'call_tool').map(row => row.args.name), [raw('obsidian', 'identity')])
+    const nameQueries = seen.filter(row => row.tool === 'find_tools').map(row => row.args.query === '' ? `server:${row.args.server}` : row.args.query)
+    assert.deepEqual([...new Set(nameQueries)].sort(), ['obsidian__identity', 'obsidian__write', 'server:github', 'server:obsidian'])
+    assert.equal(hub.calls.get('find_tools'), 4)
+    // A backend the Hub answers for with prose alone stays blocked, naming itself.
+    await assert.rejects(h.run(b, 'mcp_load', { server: 'github' }), /does not currently serve this backend/i)
+    assert.deepEqual(h.schemas(b), [])
+  } finally { await x.close() }
+})
+
 const filter = process.env.HUB_TEST_CASE
 let failures = 0
 for (const { name, run } of cases.filter(c => !filter || c.name.includes(filter))) {

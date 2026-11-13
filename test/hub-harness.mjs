@@ -11,6 +11,8 @@ export const dshImport = path => import(pathToFileURL(join(moduleRoot, path)).hr
 export const { Context, Service } = await dshImport('cordis/lib/index.js')
 const { default: SystemPrompt } = await dshImport('dsh-system-prompt/lib/index.js')
 const { default: Tools } = await dshImport('dsh-tools/lib/index.js')
+const nativeExecutor = typeof Tools.prototype.setExecutor === 'function'
+  ? await dshImport('dsh-tool-executor-native/lib/index.js') : undefined
 const { default: Agents } = await dshImport('dsh-agent/lib/index.js')
 const { default: Loader } = await dshImport('cordis-plugin-loader/lib/index.js')
 const { createScope } = await dshImport('dsh-scope/lib/index.js')
@@ -35,7 +37,9 @@ export async function tempArea(label = 'contract') {
 
 export function harness(options = {}) {
   const ctx = new Context(), scopes = [], detaches = [], agents = [], trace = []
-  new SystemPrompt(ctx, {}); new Tools(ctx); new Agents(ctx)
+  new SystemPrompt(ctx, {}); new Tools(ctx)
+  if (!options.deferAgentRegistry) new Agents(ctx)
+  nativeExecutor?.apply(ctx)
   const loader = new Loader(ctx); loader.root.data = []
   // Test modules stand in for backend activity; the Loader and entry lifecycles are real.
   loader.import = options.loaderImport ?? (async spec => spec === '@deepseek-ai/dsh-mcp-client' ? { ...actualMcpClient, apply() {} } : { apply() {} })
@@ -51,7 +55,12 @@ export function harness(options = {}) {
       return a
     },
     run(agent, name, args = {}, sig = signal) { const tool = ctx.tools.get(name, agent); assert.ok(tool, `Missing public tool ${name}`); return tool.execute(args, { agent, signal: sig }) },
-    dispatch(agent, name, args = {}, sig = signal) { return ctx.tools.execute({ agent, name, arguments: args, signal: sig, callId: `hub-test-${++sequence}` }) },
+    async dispatch(agent, name, args = {}, sig = signal) {
+      const callId = `hub-test-${++sequence}`
+      if (!nativeExecutor) return ctx.tools.execute({ agent, name, arguments: args, signal: sig, callId })
+      const batch = await ctx.tools.execute({ agent, signal: sig, calls: [{ id: callId, name, arguments: JSON.stringify(args) }] })
+      return batch.results[0].result
+    },
     schemas(agent) { return ctx.tools.schemas(agent).filter(t => t.name.startsWith('mcp__')) },
     addEntry(id, config, disabled = true) { return loader.create({ id, name: '@deepseek-ai/dsh-mcp-client', disabled, config }) },
     async close() { ctx.emit('dispose'); for (const detach of detaches.reverse()) detach(); for (const s of scopes.reverse()) await s.dispose(); await loader.root.stop?.() },

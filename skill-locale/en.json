@@ -1,0 +1,1 @@
+{"meta":{"title":"Load skills by name","description":"Use skill_load after matching task intent in skill-router. Reuses the official DSH skill registry and resource renderer; hidden skills stay out of the persistent catalog and bodies return only to the calling session."}}

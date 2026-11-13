@@ -4,6 +4,7 @@ import { mkdtemp, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, Connection } from '../index.mjs'
+import { installNativeExecutor, dispatchOne } from './runtime-compat.mjs'
 const base=process.env.DSH_TEST_MODULE_ROOT
 if (!base) throw new Error('Set DSH_TEST_MODULE_ROOT to the @deepseek-ai directory in the target DSH installation')
 const dshImport=path=>pathToFileURL(join(base,path)).href
@@ -14,6 +15,7 @@ const {default:Agents}=await import(dshImport('dsh-agent/lib/index.js'))
 const {createScope}=await import(dshImport('dsh-scope/lib/index.js'))
 const temp=await mkdtemp(join(tmpdir(),'mcp-session-tests-'))
 const ctx=new Context();new SystemPrompt(ctx,{});new Tools(ctx)
+installNativeExecutor(ctx)
 const scopes=[], agents=[]
 function agent(id){const a={id,session:{id},status:'idle'},s=createScope(ctx,a);a.ctx=s.ctx;scopes.push(s);agents.push(a);return a}
 const a=agent('A'),b=agent('B'),restored=agent('restored-A'),fork=agent('fork-A')
@@ -21,7 +23,7 @@ const signal=new AbortController().signal
 const counts=who=>ctx.tools.schemas(who).filter(t=>t.name.startsWith('mcp__')).length
 const direct=(name,args,who=a)=>ctx.tools.get(name,who).execute(args??{},{agent:who,signal})
 let n=0
-const dispatch=(name,args,who=a)=>ctx.tools.execute({name,arguments:args??{},agent:who,signal,callId:`test-${++n}`})
+const dispatch=(name,args,who=a)=>dispatchOne(ctx,{name,arguments:args??{},agent:who,signal,callId:`test-${++n}`})
 const sleep=ms=>new Promise(r=>setTimeout(r,ms))
 const turns=new WeakMap()
 function endTurn(who,count=1){for(let i=0;i<count;i++){const turn=(turns.get(who)??0)+1;turns.set(who,turn);ctx.emit('session/event',who.session,{type:'turn/end',data:{turn,reason:{kind:'completed'}}})}}
@@ -124,6 +126,7 @@ try {
  const activeScan=direct('mcp_refresh',{server:'delayed'},b).then(()=>null,e=>e)
  await sleep(25);ctx.emit('dispose');assert.ok(await activeScan);assert.equal(counts(b),0);ok('plugin unload revokes tools and active scans')
  const actualCtx=new Context();new SystemPrompt(actualCtx,{});new Tools(actualCtx);new Agents(actualCtx)
+ installNativeExecutor(actualCtx)
  const actualAgent={id:'actual-fiber-agent',session:{id:'actual-fiber-agent'},status:'idle'},actualScope=createScope(actualCtx,actualAgent);actualAgent.ctx=actualScope.ctx
  const detach=actualCtx.agents.enter(actualAgent,undefined)
  const actualPlugin={inject:['tools','agents','systemPrompt'],apply:pluginCtx=>apply(pluginCtx,{cacheFile:join(temp,'fiber.json'),servers:[{serverName:'generic',command:process.execPath,args:[fakePath]}]})}

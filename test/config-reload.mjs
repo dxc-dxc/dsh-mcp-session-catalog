@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename } from 'node:path'
 import { apply } from '../index.mjs'
+import { installNativeExecutor } from './runtime-compat.mjs'
 const base=process.env.DSH_TEST_MODULE_ROOT
 if (!base) throw new Error('Set DSH_TEST_MODULE_ROOT to the @deepseek-ai directory in the target DSH installation')
 const dshImport=path=>pathToFileURL(join(base,path)).href
@@ -15,6 +16,7 @@ const temp=await mkdtemp(join(tmpdir(),'mcp-config-reload-'))
 const serversFile=join(temp,'servers.json')
 const fake=fileURLToPath(new URL('./fake-server.mjs',import.meta.url))
 const ctx=new Context();new SystemPrompt(ctx,{});new Tools(ctx)
+installNativeExecutor(ctx)
 const agent={id:'reload-agent',session:{id:'reload-agent'},status:'idle'}
 const scope=createScope(ctx,agent);agent.ctx=scope.ctx
 const signal=new AbortController().signal

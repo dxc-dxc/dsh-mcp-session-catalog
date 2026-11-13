@@ -23,6 +23,26 @@ export function hubPublicName(server, raw) {
 }
 const hubPath = value => { try { return new URL(value).pathname.replace(/\/$/, '') === '/mcp/magpie/hub/dsh' } catch { return false } }
 const prefixOf = name => `${name.replace(/[^A-Za-z0-9_-]/g, '-')}__`
+
+// Magpie Hub >= 0.1.2xxx lists a single progressive-discovery pair instead of
+// one wire tool per backend tool. Detection is by wire name only, so a Hub that
+// still flattens every tool keeps the original path.
+const PROGRESSIVE_DISCOVERY = 'find_tools'
+const PROGRESSIVE_INVOKE = 'call_tool'
+const progressiveText = result => (Array.isArray(result?.content) ? result.content : [])
+  .filter(part => part?.type === 'text' && typeof part.text === 'string')
+  .map(part => part.text)
+  .join('\n')
+// find_tools answers prose + a JSON array for a match, and prose alone when a
+// backend is absent. Never throw here: an unreachable backend must only cost
+// its own service, exactly like an empty legacy listing does.
+const parseProgressiveTools = text => {
+  const start = text.indexOf('['), end = text.lastIndexOf(']')
+  if (start < 0 || end <= start) return []
+  let parsed
+  try { parsed = JSON.parse(text.slice(start, end + 1)) } catch { return [] }
+  return Array.isArray(parsed) ? parsed.filter(tool => tool && typeof tool.name === 'string') : []
+}
 const aborted = signal => { if (signal?.aborted) throw new Error('MCP call aborted') }
 
 export class HubAdapter {
@@ -262,6 +282,61 @@ export class HubAdapter {
     }
     await Promise.all([...(this.closing ?? [])])
   }
+  /**
+   * Read the Hub's tool catalog in whichever shape it serves: the flattened
+   * per-tool listing the catalog has always consumed, or the progressive
+   * discovery pair (`find_tools`/`call_tool`) that names every backend tool
+   * only through a discovery call. A service the Hub does not currently serve
+   * is recorded, not thrown: it costs only its own service.
+   * @param physical - the connection generation owning the listing.
+   * @param signal - cancellation for every request issued here.
+   * @returns every raw tool entry, named `<server>__<tool>` as before.
+   */
+  async listHubTools(physical, signal) {
+    const listed = await physical.connection.listTools(signal)
+    const names = listed.map(tool => tool?.name)
+    const prefixes = [...this.services.keys()].map(prefixOf)
+    if (names.some(name => typeof name === 'string' && prefixes.some(prefix => name.startsWith(prefix)))) {
+      physical.progressive = false
+      physical.missing = new Set()
+      return listed
+    }
+    if (!names.includes(PROGRESSIVE_DISCOVERY) || !names.includes(PROGRESSIVE_INVOKE)) {
+      physical.progressive = false
+      physical.missing = new Set()
+      return listed
+    }
+    physical.progressive = true
+    physical.missing = new Set()
+    // The discovery answer is size-bounded: it carries full definitions for the
+    // first few matches and names only for the rest. Read the names, then ask
+    // for each remaining tool by name. Fetched definitions survive inside one
+    // connection generation, so a refresh re-reads names (cheap) and only pays
+    // for tools that appeared since.
+    physical.definitions ??= new Map()
+    const collected = []
+    for (const service of this.services.values()) {
+      const listing = progressiveText(await physical.connection.call(PROGRESSIVE_DISCOVERY, { query: '', server: service.name }, signal))
+      const direct = parseProgressiveTools(listing)
+      const names = new Set(direct.map(tool => tool.name))
+      for (const match of listing.matchAll(/^-\s+([^\s:]+):/gm)) names.add(match[1])
+      if (!names.size) {
+        physical.missing.add(service.name)
+        continue
+      }
+      for (const tool of direct) physical.definitions.set(tool.name, tool)
+      for (const name of names) {
+        if (!physical.definitions.has(name)) {
+          const answer = parseProgressiveTools(progressiveText(await physical.connection.call(PROGRESSIVE_DISCOVERY, { query: name }, signal)))
+          const exact = answer.find(tool => tool.name === name) ?? answer[0]
+          if (exact !== undefined) physical.definitions.set(name, exact)
+        }
+        const definition = physical.definitions.get(name)
+        if (definition !== undefined) collected.push(definition)
+      }
+    }
+    return collected
+  }
   async discover(ref, signal, force = false) {
     const physical = ref.physical
     if (ref.released || physical.closed) throw new Error('Hub reference released')
@@ -271,7 +346,7 @@ export class HubAdapter {
     if (!physical.discovery) {
       const task = (async () => {
         await this.beforeRequest()
-        const tools = await physical.connection.listTools()
+        const tools = await this.listHubTools(physical, signal)
         if (this.closed || physical.closed || this.physical !== physical || physical.generation !== this.generation) throw new Error('Hub discovery generation retired')
         const grouped = new Map(), seen = new Set(), issues = new Map(), owners = new Map()
         const block = (name, why) => { if (!issues.has(name)) issues.set(name, why) }
@@ -307,6 +382,13 @@ export class HubAdapter {
           const group = grouped.get(service.name) ?? []
           group.push({ ...tool, publicName, rawName: tool.name })
           grouped.set(service.name, group)
+        }
+        // Progressive discovery can answer for a Library source that the Hub no
+        // longer serves (backend stopped, crashed, or never started). Report the
+        // concrete reason instead of the generic omission.
+        for (const name of physical.missing ?? []) {
+          if (!this.services.has(name) || grouped.has(name)) continue
+          block(name, 'Hub does not currently serve this backend')
         }
         // A blocked service loses its authorization rather than failing the
         // whole listing: no snapshot, no lease, and a named reason to report.
@@ -427,7 +509,12 @@ export class HubAdapter {
       // Re-check after counting: a revocation that raced the admission check
       // must not submit a call on a retired lease.
       if (!this.valid(lease)) throw new Error('Hub tool lease revoked before submission')
-      return await physical.connection.call(tool.rawName, args, exec.signal, tool)
+      // Progressive Hubs never expose backend tools as wire tools: the single
+      // invoker takes the backend name, which is exactly the raw name this
+      // catalog recorded during discovery.
+      return physical.progressive
+        ? await physical.connection.call(PROGRESSIVE_INVOKE, { name: tool.rawName, arguments: args ?? {} }, exec.signal)
+        : await physical.connection.call(tool.rawName, args, exec.signal, tool)
     } finally {
       lease.active--; physical.calls--
       if (!physical.calls) physical.drained?.()

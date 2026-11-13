@@ -21,7 +21,13 @@ class HubGate {
       const agent = context.scope
       // Assert both native schemas and generated PTC declarations. Never try to
       // wash an already accepted snapshot at agent/pre-step.
-      for (const tool of assembly.tools) {
+      // DSH 0.2.2 adds provider-owned tools only after this waterfall returns.
+      // Its public registry supplies the same scope and step admission view;
+      // do not skip validation or inspect every registered conditional tool.
+      const schemas = Array.isArray(assembly.tools)
+        ? assembly.tools
+        : ctx.tools.schemas(agent, context.toolSet)
+      for (const tool of schemas) {
         const reason = this.reason(agent, tool.name)
         if (reason) throw new Error(reason)
       }

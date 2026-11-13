@@ -1,6 +1,6 @@
 {
   "name": "@dxc-dxc/dsh-mcp-session-catalog",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "type": "module",
   "license": "MIT",
   "author": "dxc-dxc",
@@ -8,7 +8,7 @@
   "scripts": {
     "test": "node test/run.mjs"
   },
-  "description": "Vendor-neutral shared MCP services with session-scoped tools, hot connection reload and archive/turn-based reclamation",
+  "description": "Session-scoped MCP services and on-demand skill loading through the official DSH skill registry",
   "exports": {
     ".": "./index.mjs",
     "./v2_4": "./runtime-v2.4.mjs",
@@ -19,6 +19,9 @@
     "./v2_5": "./runtime-v2.5.mjs",
     "./v2_5/locale/*.json": "./locale/*.json",
     "./v2_5/icon": "./icon.svg",
+    "./skill-loader": "./skill-loader.mjs",
+    "./skill-loader/locale/*.json": "./skill-locale/*.json",
+    "./skill-loader/icon": "./icon.svg",
     "./hub-gate": "./hub-gate.mjs",
     "./hub-gate/locale/*.json": "./locale/*.json",
     "./hub-gate/icon": "./icon.svg"
@@ -30,6 +33,8 @@
     "hub-adapter.mjs",
     "hub-gate.mjs",
     "hub-ownership.mjs",
+    "skill-loader.mjs",
+    "skill-locale/*.json",
     "runtime-v2.5.mjs",
     "runtime-v2.4.mjs",
     "cordis.patch.yml",
@@ -48,7 +53,7 @@
   },
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.2.1-rc.2 <0.2.2"
+    "dsh": ">=0.2.1-rc.2 <0.2.2 || 0.2.2-rc.1 || 0.2.2-rc.2"
   },
   "os": [
     "darwin"
